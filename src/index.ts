@@ -131,6 +131,8 @@ function addPlayers(eventId: string, players: PlayerData[]) {
       }
       console.log('Player added.');
       addNextPlayer();
+    }, (err) => {
+      console.error(err);
     });
 
     addNextPlayer();
