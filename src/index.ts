@@ -4,6 +4,21 @@ import * as dialog from 'node-file-dialog';
 import * as prompts from 'prompts';
 import {Event, EventlinkClient, Organization} from 'spirit-link';
 
+const CSV_MAPPINGS = {
+  firstName: 'firstName',
+  lastName: 'lastName',
+  email: 'email'
+}
+type PlayerData = {email: string, firstName: string, lastName: string};
+
+function convertCsvToPlayerData(row: any): PlayerData {
+  return {
+    firstName: row[CSV_MAPPINGS.firstName],
+    lastName: row[CSV_MAPPINGS.lastName],
+    email: row[CSV_MAPPINGS.email],
+  }
+}
+
 let eventlink: EventlinkClient;
 
 (async () => {
@@ -73,12 +88,22 @@ let eventlink: EventlinkClient;
 
   const rows = [];
   csv.parseFile(csvFile, { headers: true })
-    .on('data', (row) => {
-      if(row.email && row.firstName && row.lastName) {
+    .on('data', (rawRow) => {
+      const row = convertCsvToPlayerData(rawRow);
+      if(row.firstName && row.lastName) {
         if(existingPlayers.some((reg) => reg.firstName === row.firstName && reg.lastName === row.lastName)) {
-          console.warn(`WARNING: There is already a player in this event with the name "${row.firstName} ${row.lastName}". They may have already been added - if the email address ${row.email} is in the error file, you may want to ignore it.`);
+          if(row.email) {
+            console.warn(`WARNING: There is already a player in this event with the name "${row.firstName} ${row.lastName}". They may have already been added - if the email address ${row.email} is in the error file, you may want to ignore it.`);
+          } else {
+            console.warn(`WARNING: There is already a player in this event with the name "${row.firstName} ${row.lastName}". They did not provide an email address. They will be skipped.`)
+            return;
+          }
         }
         rows.push(row);
+      } else {
+        console.error('User data missing from row - maybe the CSV_MAPPINGS are set wrong?');
+        console.error(rawRow);
+        process.exit(1);
       }
     })
   .on('end', async () => {
@@ -96,7 +121,6 @@ let eventlink: EventlinkClient;
   });
 })();
 
-type PlayerData = {email: string, firstName: string, lastName: string};
 function addPlayers(eventId: string, players: PlayerData[]) {
   const missingPlayers: PlayerData[] = [];
 
@@ -108,14 +132,33 @@ function addPlayers(eventId: string, players: PlayerData[]) {
         resolve(missingPlayers);
       } else {
         console.log('-----');
-        console.log(`Adding player ${players[i].firstName} ${players[i].lastName} (${players[i].email})`);
-        eventlink.registerPlayerByEmail(eventId, players[i].email).then((result) => {
-          if(!result.success) {
-            console.log('Unable to add player. Logging.');
-            missingPlayers.push(players[i]);
-            addNextPlayer();
-          }
-        });
+        if(!players[i].email) {
+          console.log(`Adding guest player ${players[i].firstName} ${players[i].lastName}`);
+          addGuest(eventId, players[i], missingPlayers).then(() => addNextPlayer());
+        } else {
+          console.log(`Adding player ${players[i].firstName} ${players[i].lastName} (${players[i].email})`);
+          eventlink.registerPlayerByEmail(eventId, players[i].email).then((result) => {
+            if(!result.success) {
+              const errMsg: string | undefined = result.err.message;
+              if(errMsg) {
+                if(errMsg.includes('Player already registered')) {
+                  console.log('Player already registered. Skipping.');
+                  addNextPlayer();
+                  return;
+                } else if(errMsg.includes('No platform account found')) {
+                  console.log('Player does not have an account with that email address. Adding as guest.');
+                  addGuest(eventId, players[i], missingPlayers).then(() => addNextPlayer());
+                  return;
+                } else {
+                  console.log(errMsg);
+                }
+              }
+              console.log('Unable to add player. Logging.');
+              missingPlayers.push(players[i]);
+              addNextPlayer();
+            }
+          });
+        }
       }
     };
 
@@ -137,4 +180,12 @@ function addPlayers(eventId: string, players: PlayerData[]) {
 
     addNextPlayer();
   });
+}
+
+async function addGuest(eventId: string, player: PlayerData, missingPlayers: PlayerData[]) {
+  const result = await eventlink.registerGuestPlayer(eventId, player.firstName, player.lastName);
+  if(!result.success) {
+    console.error(`Unable to add guest player for some reason - ${player.firstName} ${player.lastName}`);
+    missingPlayers.push(player);
+  }
 }
