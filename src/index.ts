@@ -91,7 +91,10 @@ let eventlink: EventlinkClient;
     .on('data', (rawRow) => {
       const row = convertCsvToPlayerData(rawRow);
       if(row.firstName && row.lastName) {
-        if(existingPlayers.some((reg) => reg.firstName === row.firstName && reg.lastName === row.lastName)) {
+        if(existingPlayers.some((reg) =>
+          reg.firstName.toLowerCase() === row.firstName.toLowerCase() &&
+          reg.lastName.toLowerCase() === row.lastName.toLowerCase()
+        )) {
           if(row.email) {
             console.warn(`WARNING: There is already a player in this event with the name "${row.firstName} ${row.lastName}". They may have already been added - if the email address ${row.email} is in the error file, you may want to ignore it.`);
           } else {
